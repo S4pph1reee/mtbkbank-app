@@ -1,0 +1,276 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  STANDARD
+  SILVER
+  GOLD
+  PLATINUM
+}
+
+enum Rarity {
+  COMMON
+  RARE
+  EPIC
+  LEGENDARY
+}
+
+enum CardSource {
+  PURCHASE
+  TRADE
+  QUEST
+  ADMIN
+  GIFT
+}
+
+enum TradeStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  CANCELLED
+}
+
+enum TransactionType {
+  PURCHASE
+  TRANSFER_IN
+  TRANSFER_OUT
+  TOPUP
+  PAYMENT
+  SUBSCRIPTION
+}
+
+enum QuestType {
+  DAILY
+  WEEKLY
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  phone         String    @unique
+  pin           String
+  avatarUrl     String?
+  mbPoints      Int       @default(0)
+  status        UserStatus @default(STANDARD)
+  isAdmin       Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      BankAccount[]
+  bankCards     BankCard[]
+  userCards     UserCard[]
+  decks         Deck[]
+  tradesFrom    CardTrade[]   @relation("TradesFrom")
+  tradesTo      CardTrade[]   @relation("TradesTo")
+  userQuests    UserQuest[]
+  subscriptions Subscription[]
+  spendingLimits SpendingLimit[]
+  notifications Notification[]
+  transactions  Transaction[]
+}
+
+model BankAccount {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  type      String   // main, savings, currency
+  balance   Float    @default(0)
+  currency  String   @default("RUB")
+  createdAt DateTime @default(now())
+
+  user         User          @relation(fields: [userId], references: [id])
+  bankCards    BankCard[]
+  transactionsFrom Transaction[] @relation("TransFrom")
+  transactionsTo   Transaction[] @relation("TransTo")
+}
+
+model BankCard {
+  id          String   @id @default(cuid())
+  userId      String
+  accountId   String
+  maskedNumber String
+  type        String   // VISA, Mastercard
+  tier        String   // Standard, Premium, Black
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  user    User        @relation(fields: [userId], references: [id])
+  account BankAccount @relation(fields: [accountId], references: [id])
+}
+
+model Transaction {
+  id            String          @id @default(cuid())
+  userId        String
+  fromAccountId String?
+  toAccountId   String?
+  amount        Float
+  currency      String          @default("RUB")
+  type          TransactionType
+  category      String?
+  merchant      String?
+  merchantIcon  String?
+  description   String?
+  status        String          @default("completed") // completed, pending, scheduled
+  scheduledAt   DateTime?
+  droppedCardId String?         // card dropped from this transaction
+  createdAt     DateTime        @default(now())
+
+  user        User         @relation(fields: [userId], references: [id])
+  fromAccount BankAccount? @relation("TransFrom", fields: [fromAccountId], references: [id])
+  toAccount   BankAccount? @relation("TransTo", fields: [toAccountId], references: [id])
+}
+
+model CollectionCard {
+  id              String   @id @default(cuid())
+  name            String
+  brandName       String
+  brandIcon       String   // material icon name
+  rarity          Rarity
+  cashbackPercent Float
+  cashbackCategory String? // specific category or null for all
+  imageUrl        String?
+  description     String?
+  mbValue         Int      // points when converted
+  maxHealth       Int      @default(100)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  userCards UserCard[]
+}
+
+model UserCard {
+  id               String     @id @default(cuid())
+  userId           String
+  collectionCardId String
+  health           Int        @default(100)
+  source           CardSource
+  acquiredAt       DateTime   @default(now())
+
+  user           User           @relation(fields: [userId], references: [id])
+  collectionCard CollectionCard @relation(fields: [collectionCardId], references: [id])
+  deckCards      DeckCard[]
+}
+
+model Deck {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  isActive  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User       @relation(fields: [userId], references: [id])
+  deckCards DeckCard[]
+}
+
+model DeckCard {
+  id         String @id @default(cuid())
+  deckId     String
+  userCardId String
+  slotIndex  Int
+
+  deck     Deck     @relation(fields: [deckId], references: [id], onDelete: Cascade)
+  userCard UserCard @relation(fields: [userCardId], references: [id], onDelete: Cascade)
+
+  @@unique([deckId, slotIndex])
+  @@unique([deckId, userCardId])
+}
+
+model CardTrade {
+  id              String      @id @default(cuid())
+  fromUserId      String
+  toUserId        String?
+  offeredCardId   String
+  requestedCardId String?
+  mbPointsOffer   Int         @default(0)
+  status          TradeStatus @default(PENDING)
+  isGift          Boolean     @default(false)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  fromUser User  @relation("TradesFrom", fields: [fromUserId], references: [id])
+  toUser   User? @relation("TradesTo", fields: [toUserId], references: [id])
+}
+
+model Quest {
+  id          String    @id @default(cuid())
+  title       String
+  description String
+  icon        String
+  rewardMB    Int       @default(0)
+  rewardCardId String?
+  type        QuestType
+  condition   String    // JSON string describing condition
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+
+  userQuests UserQuest[]
+}
+
+model UserQuest {
+  id          String    @id @default(cuid())
+  userId      String
+  questId     String
+  progress    Int       @default(0)
+  target      Int       @default(1)
+  completed   Boolean   @default(false)
+  claimed     Boolean   @default(false)
+  completedAt DateTime?
+  assignedAt  DateTime  @default(now())
+
+  user  User  @relation(fields: [userId], references: [id])
+  quest Quest @relation(fields: [questId], references: [id])
+
+  @@unique([userId, questId, assignedAt])
+}
+
+model Subscription {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  icon        String
+  amount      Float
+  currency    String   @default("RUB")
+  nextPayment DateTime
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model SpendingLimit {
+  id          String @id @default(cuid())
+  userId      String
+  category    String
+  limitAmount Float
+  spentAmount Float  @default(0)
+  period      String @default("monthly")
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, category])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  body      String
+  icon      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model SystemConfig {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String // JSON value
+}
