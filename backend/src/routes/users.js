@@ -66,4 +66,33 @@ router.get('/me/stats', async (req, res) => {
   }
 });
 
+// GET /api/users/search
+router.get('/search', async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.length < 3) return res.json([]);
+
+    const users = await req.prisma.user.findMany({
+      where: {
+        id: { not: req.userId },
+        OR: [
+          { phone: { contains: q, mode: 'insensitive' } },
+          { name: { contains: q, mode: 'insensitive' } }
+        ]
+      },
+      select: {
+         id: true,
+         name: true,
+         phone: true,
+         avatarUrl: true
+      },
+      take: 10
+    });
+    
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
 module.exports = router;

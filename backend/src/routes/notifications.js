@@ -53,4 +53,20 @@ router.put('/read-all', async (req, res) => {
   }
 });
 
+// POST /api/notifications/register-push-token
+router.post('/register-push-token', async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ error: 'Token is required' });
+
+    await req.prisma.user.update({
+      where: { id: req.userId },
+      data: { expoPushToken: token }
+    });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
 module.exports = router;

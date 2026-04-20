@@ -1,0 +1,71 @@
+name: MTBank CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  backend-test:
+    name: Backend Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18.x'
+      
+      - name: Install Dependencies
+        working-directory: ./backend
+        run: npm ci
+        
+      - name: Run Jest Engine Tests
+        working-directory: ./backend
+        run: npm test
+
+  mobile-lint:
+    name: Mobile TypeScript Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18.x'
+          
+      - name: Install Dependencies
+        working-directory: ./mobile
+        run: npm ci --legacy-peer-deps
+        
+      - name: TypeScript Compiler Check
+        working-directory: ./mobile
+        run: npx tsc --noEmit
+
+  expo-build-preview:
+    name: EAS Android Build
+    needs: [backend-test, mobile-lint]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18.x'
+          
+      - name: Setup Expo
+        uses: expo/expo-github-action@v8
+        with:
+          expo-version: latest
+          eas-version: latest
+          token: ${{ secrets.EAS_TOKEN }}
+          
+      - name: Install Dependencies
+        working-directory: ./mobile
+        run: npm ci --legacy-peer-deps
+        
+      - name: Execute EAS Build
+        working-directory: ./mobile
+        run: eas build --platform android --profile preview --non-interactive

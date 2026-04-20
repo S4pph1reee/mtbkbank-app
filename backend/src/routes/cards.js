@@ -1,6 +1,7 @@
 const express = require('express');
 const { authMiddleware } = require('../middleware/auth');
 const { sacrificeCard, convertCardToPoints } = require('../services/cardEngine');
+const { getCached, setCached } = require('../cache');
 const router = express.Router();
 
 router.use(authMiddleware);
@@ -9,6 +10,15 @@ router.use(authMiddleware);
 router.get('/collection', async (req, res) => {
   try {
     const { rarity } = req.query;
+    
+    // Redis Cache key
+    const cacheKey = rarity ? `cards:collection:rarity:${rarity}` : 'cards:collection:all';
+    
+    const cachedData = await getCached(cacheKey);
+    if (cachedData) {
+       return res.json(cachedData);
+    }
+
     const where = { isActive: true };
     if (rarity) where.rarity = rarity;
 
@@ -16,6 +26,10 @@ router.get('/collection', async (req, res) => {
       where,
       orderBy: [{ rarity: 'asc' }, { name: 'asc' }],
     });
+
+    // Cache results for 1 hour (3600 seconds)
+    await setCached(cacheKey, cards, 3600);
+
     res.json(cards);
   } catch (err) {
     res.status(500).json({ error: 'Ошибка сервера' });

@@ -56,6 +56,7 @@ model User {
   phone         String    @unique
   pin           String
   avatarUrl     String?
+  expoPushToken String?
   mbPoints      Int       @default(0)
   status        UserStatus @default(STANDARD)
   isAdmin       Boolean   @default(false)

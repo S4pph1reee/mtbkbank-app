@@ -39,6 +39,14 @@ router.post('/', async (req, res) => {
     });
     if (!card) return res.status(404).json({ error: 'Карта не найдена' });
 
+    // Verify user has enough mbPoints
+    if (mbPointsOffer > 0) {
+      const user = await req.prisma.user.findUnique({ where: { id: req.userId } });
+      if (user.mbPoints < mbPointsOffer) {
+        return res.status(400).json({ error: 'Недостаточно MB points' });
+      }
+    }
+
     const trade = await req.prisma.cardTrade.create({
       data: {
         fromUserId: req.userId,
@@ -72,6 +80,35 @@ router.put('/:id/accept', async (req, res) => {
       where: { id: req.params.id, toUserId: req.userId, status: 'PENDING' },
     });
     if (!trade) return res.status(404).json({ error: 'Обмен не найден' });
+
+    // Verify offered card still belongs to fromUserId securely preventing exploits
+    const offeredCard = await req.prisma.userCard.findFirst({
+      where: { id: trade.offeredCardId, userId: trade.fromUserId },
+    });
+    if (!offeredCard) {
+      await req.prisma.cardTrade.update({ where: { id: trade.id }, data: { status: 'CANCELLED' } });
+      return res.status(400).json({ error: 'Карта отправителя больше не доступна' });
+    }
+
+    // Verify requested card still belongs to acceptor
+    if (trade.requestedCardId) {
+      const requestedCard = await req.prisma.userCard.findFirst({
+        where: { id: trade.requestedCardId, userId: req.userId },
+      });
+      if (!requestedCard) {
+        await req.prisma.cardTrade.update({ where: { id: trade.id }, data: { status: 'CANCELLED' } });
+        return res.status(400).json({ error: 'У вас больше нет запрашиваемой карты' });
+      }
+    }
+
+    // Verify MB point constraints haven't shifted
+    if (trade.mbPointsOffer > 0) {
+      const fromUser = await req.prisma.user.findUnique({ where: { id: trade.fromUserId } });
+      if (fromUser.mbPoints < trade.mbPointsOffer) {
+        await req.prisma.cardTrade.update({ where: { id: trade.id }, data: { status: 'CANCELLED' } });
+        return res.status(400).json({ error: 'У отправителя больше нет средств для этого обмена' });
+      }
+    }
 
     // Transfer offered card
     await req.prisma.deckCard.deleteMany({ where: { userCardId: trade.offeredCardId } });

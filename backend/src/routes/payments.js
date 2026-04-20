@@ -64,24 +64,34 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Недостаточно средств' });
     }
 
-    const [updatedAccount, transaction] = await req.prisma.$transaction([
-      req.prisma.bankAccount.update({
-        where: { id: accountId },
-        data: { balance: { decrement: amount } },
-      }),
-      req.prisma.transaction.create({
-        data: {
-          userId: req.userId,
-          fromAccountId: accountId,
-          amount,
-          type: 'PURCHASE',
-          category: category || 'Оплата',
-          merchant: merchant || 'Платёж',
-          merchantIcon: merchantIcon || 'payments',
-          description,
-        },
-      }),
-    ]);
+    // Execute atomic validation locking exact decimal values against rapid taps
+    const result = await req.prisma.$transaction(async (tx) => {
+       const uAcc = await tx.bankAccount.update({
+         where: { id: accountId },
+         data: { balance: { decrement: amount } },
+       });
+       
+       if (uAcc.balance < 0) {
+          throw new Error('Недостаточно средств на момент оплаты');
+       }
+
+       const trans = await tx.transaction.create({
+         data: {
+           userId: req.userId,
+           fromAccountId: accountId,
+           amount,
+           type: 'PURCHASE',
+           category: category || 'Оплата',
+           merchant: merchant || 'Платёж',
+           merchantIcon: merchantIcon || 'payments',
+           description,
+         },
+       });
+
+       return { updatedAccount: uAcc, transaction: trans };
+    });
+
+    const { updatedAccount, transaction } = result;
 
     // Update spending limits
     if (category) {
@@ -105,6 +115,9 @@ router.post('/', async (req, res) => {
       } : null,
     });
   } catch (err) {
+    if (err.message === 'Недостаточно средств на момент оплаты') {
+       return res.status(400).json({ error: err.message });
+    }
     console.error('Payment error:', err);
     res.status(500).json({ error: 'Ошибка сервера' });
   }

@@ -1,6 +1,7 @@
 const express = require('express');
 const { authMiddleware } = require('../middleware/auth');
 const { calculateDeckCashback } = require('../services/cardEngine');
+const { getCached, setCached, invalidatePattern } = require('../cache');
 const router = express.Router();
 
 router.use(authMiddleware);
@@ -120,6 +121,7 @@ router.put('/:id', async (req, res) => {
     });
 
     const { totalCashback, breakdown } = await calculateDeckCashback(req.prisma, deck.id);
+    await invalidatePattern(`deck:cashback:${deck.id}`);
     res.json({ ...updated, totalCashback, cashbackBreakdown: breakdown });
   } catch (err) {
     console.error('Deck update error:', err);
@@ -166,7 +168,17 @@ router.get('/:id/cashback', async (req, res) => {
     });
     if (!deck) return res.status(404).json({ error: 'Колода не найдена' });
 
+    const cacheKey = `deck:cashback:${deck.id}`;
+    const cachedData = await getCached(cacheKey);
+    if (cachedData) {
+      return res.json(cachedData);
+    }
+
     const result = await calculateDeckCashback(req.prisma, deck.id);
+    
+    // Cache for 30 seconds
+    await setCached(cacheKey, result, 30);
+    
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: 'Ошибка сервера' });

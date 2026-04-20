@@ -2,6 +2,9 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const cron = require('node-cron');
+const http = require('http');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const { PrismaClient } = require('@prisma/client');
 
 const authRoutes = require('./routes/auth');
@@ -18,13 +21,26 @@ const limitRoutes = require('./routes/limits');
 const notificationRoutes = require('./routes/notifications');
 const adminRoutes = require('./routes/admin');
 const { decayAllCardHealth, cleanupDeadCards } = require('./services/cardEngine');
+const { setupWebSockets } = require('./websocket');
 
 const app = express();
+const server = http.createServer(app);
 const prisma = new PrismaClient();
 const PORT = process.env.PORT || 3000;
 
+// Security Middlewares
+app.use(helmet());
 app.use(cors());
 app.use(express.json());
+
+// Global Rate Limiter
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: { error: 'Too many requests from this IP, please try again after 15 minutes' }
+});
+// Apply global limiter conceptually to API
+app.use('/api', globalLimiter);
 
 // Make prisma available to routes
 app.use((req, res, next) => {
@@ -52,6 +68,9 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Setup WebSockets
+setupWebSockets(server);
+
 // Cron: Health decay every day at midnight
 cron.schedule('0 0 * * *', async () => {
   console.log('[CRON] Running daily card health decay...');
@@ -64,8 +83,14 @@ cron.schedule('0 0 * * *', async () => {
   }
 });
 
-app.listen(PORT, () => {
+// Global Error Handler
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ error: 'Something went wrong!', message: err.message });
+});
+
+server.listen(PORT, () => {
   console.log(`🏦 MTBBank API running on port ${PORT}`);
 });
 
-module.exports = app;
+module.exports = { app, server };

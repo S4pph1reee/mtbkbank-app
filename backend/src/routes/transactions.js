@@ -1,6 +1,7 @@
 const express = require('express');
 const { authMiddleware } = require('../middleware/auth');
 const { processCardDrop } = require('../services/cardEngine');
+const { getCached, setCached } = require('../cache');
 const router = express.Router();
 
 router.use(authMiddleware);
@@ -34,6 +35,14 @@ router.get('/', async (req, res) => {
 router.get('/analytics', async (req, res) => {
   try {
     const { period = 'month' } = req.query;
+    
+    // Check Cache
+    const cacheKey = `analytics:${req.userId}:${period}`;
+    const cachedData = await getCached(cacheKey);
+    if (cachedData) {
+      return res.json(cachedData);
+    }
+
     const now = new Date();
     let startDate;
 
@@ -70,7 +79,11 @@ router.get('/analytics', async (req, res) => {
       percentage: totalSpent > 0 ? Math.round((amount / totalSpent) * 100) : 0,
     })).sort((a, b) => b.amount - a.amount);
 
-    res.json({ totalSpent, breakdown, period });
+    const payload = { totalSpent, breakdown, period };
+    // Cache for 5 minutes
+    await setCached(cacheKey, payload, 300);
+
+    res.json(payload);
   } catch (err) {
     res.status(500).json({ error: 'Ошибка сервера' });
   }
@@ -97,29 +110,37 @@ router.post('/transfer', async (req, res) => {
     });
     if (!toAccount) return res.status(404).json({ error: 'Счёт получателя не найден' });
 
-    const result = await req.prisma.$transaction([
-      req.prisma.bankAccount.update({
-        where: { id: fromAccountId },
-        data: { balance: { decrement: amount } },
-      }),
-      req.prisma.bankAccount.update({
-        where: { id: toAccountId },
-        data: { balance: { increment: amount } },
-      }),
-      req.prisma.transaction.create({
-        data: {
-          userId: req.userId,
-          fromAccountId,
-          toAccountId,
-          amount,
-          type: 'TRANSFER_OUT',
-          category: 'Перевод',
-          merchant: description || 'Перевод',
-          merchantIcon: 'sync_alt',
-          description: description || `Перевод на ${amount} ${fromAccount.currency}`,
-        },
-      }),
-    ]);
+    // Execute ATOMIC transaction protecting against double-charges via rapid clicks
+    const result = await req.prisma.$transaction(async (tx) => {
+       const dec = await tx.bankAccount.update({
+         where: { id: fromAccountId },
+         data: { balance: { decrement: amount } },
+       });
+       if (dec.balance < 0) {
+         throw new Error('Недостаточно средств на момент списания');
+       }
+
+       const inc = await tx.bankAccount.update({
+         where: { id: toAccountId },
+         data: { balance: { increment: amount } },
+       });
+
+       const trans = await tx.transaction.create({
+         data: {
+           userId: req.userId,
+           fromAccountId,
+           toAccountId,
+           amount,
+           type: 'TRANSFER_OUT',
+           category: 'Перевод',
+           merchant: description || 'Перевод',
+           merchantIcon: 'sync_alt',
+           description: description || `Перевод на ${amount} ${fromAccount.currency}`,
+         },
+       });
+
+       return { trans };
+    });
 
     // If toAccount belongs to another user, create a TRANSFER_IN for them
     if (toAccount.userId !== req.userId) {
@@ -138,8 +159,11 @@ router.post('/transfer', async (req, res) => {
       });
     }
 
-    res.json({ success: true, transaction: result[2] });
+    res.json({ success: true, transaction: result.trans });
   } catch (err) {
+    if (err.message === 'Недостаточно средств на момент списания') {
+      return res.status(400).json({ error: err.message });
+    }
     console.error('Transfer error:', err);
     res.status(500).json({ error: 'Ошибка сервера' });
   }

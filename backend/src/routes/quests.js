@@ -73,19 +73,26 @@ router.get('/weekly', async (req, res) => {
 // POST /api/quests/:id/claim
 router.post('/:id/claim', async (req, res) => {
   try {
-    const userQuest = await req.prisma.userQuest.findFirst({
+    // Atomic update bound preventing double-spend clicks immediately asserting lock
+    const { count } = await req.prisma.userQuest.updateMany({
       where: {
         id: req.params.id,
         userId: req.userId,
         completed: true,
         claimed: false,
       },
-      include: { quest: true },
+      data: { claimed: true },
     });
 
-    if (!userQuest) {
-      return res.status(404).json({ error: 'Квест не найден или не завершён' });
+    if (count === 0) {
+      return res.status(404).json({ error: 'Квест не найден или уже собран!' });
     }
+
+    // Now safely fetch quest details to award MBs
+    const userQuest = await req.prisma.userQuest.findFirst({
+      where: { id: req.params.id },
+      include: { quest: true },
+    });
 
     // Give reward
     if (userQuest.quest.rewardMB > 0) {
@@ -94,12 +101,6 @@ router.post('/:id/claim', async (req, res) => {
         data: { mbPoints: { increment: userQuest.quest.rewardMB } },
       });
     }
-
-    // Mark as claimed
-    await req.prisma.userQuest.update({
-      where: { id: userQuest.id },
-      data: { claimed: true },
-    });
 
     res.json({
       success: true,
